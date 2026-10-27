@@ -1,4 +1,4 @@
-在CONDA环境go2_rough_curriculum中，训练GO2, 在复杂地形行走和速度跟踪的能力，评估启用 height_scanner的收益和风险。
+在CONDA环境go2_rough_curriculum中，训练GO2, 在复杂地形行走和速度跟踪的能力，评估启用 height_scanner的收益和风险。检查现在的height_scanner的楼梯中地形起伏是多少?
 守护进程scripts/monitor_tb_check.py，每6个小时监控TensorBoard里面的各项训练曲线，发现训练曲线恶化后，自动停止训练，并修改代码，调整超参数，重新训练。
 要求改动尽量小，方便做消融对照实验。
 训练完成后，如何验证训练结果？`unitree_rl_lab` 的 editable 安装实际没有指向本仓库的问题还存在吗

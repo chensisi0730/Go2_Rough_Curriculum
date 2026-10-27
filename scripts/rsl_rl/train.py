@@ -282,6 +282,23 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if agent_cfg.resume or agent_cfg.algorithm.class_name == "Distillation":
         resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
 
+    # 恢复地形等级（terrain levels）：curriculum 会周期性把等级存到 run 目录下的
+    # terrain_levels.pt，--resume 时读回来，保证地形难度不降级（不需要从 level 0 重来）。
+    if agent_cfg.resume:
+        _tl_path = os.path.join(os.path.dirname(resume_path), "terrain_levels.pt")
+        if os.path.isfile(_tl_path):
+            _terrain = getattr(env.unwrapped.scene, "terrain", None)
+            if _terrain is not None and getattr(_terrain, "terrain_origins", None) is not None:
+                _saved = torch.load(_tl_path, map_location=env.unwrapped.device)
+                _n = min(int(_saved.numel()), int(_terrain.terrain_levels.numel()))
+                _terrain.terrain_levels[:_n] = _saved[:_n].to(_terrain.terrain_levels.dtype)
+                _terrain.env_origins[:_n] = _terrain.terrain_origins[
+                    _terrain.terrain_levels[:_n], _terrain.terrain_types[:_n]
+                ]
+                print(f"[INFO] 已从 {_tl_path} 恢复地形等级（terrain levels），共 {_n} 个环境")
+        else:
+            print(f"[INFO] 未找到 {_tl_path}，地形等级从初始值开始（max_init_terrain_level）")
+
     # wrap for video recording
     if args_cli.video:
         video_kwargs = {

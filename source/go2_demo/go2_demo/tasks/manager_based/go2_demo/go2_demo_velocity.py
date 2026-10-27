@@ -123,6 +123,9 @@ class RobotSceneCfg(InteractiveSceneCfg):
     )
     robot: ArticulationCfg = RobotCFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
     # 高度传感
+    # 注意：RayCasterCfg.offset.pos 是「射线起点（ray start，射线出发点）相对机体 base 的偏移」，
+    #   z 取 20 m 保证射线起点永远在地形上方（不会从地形内部起射）。
+    #   视场 1.6x1.0 m = 17x11 = 187 条射线（观测维度 247），与 IsaacLab 官方 rough 配置一致。
     height_scanner = RayCasterCfg(
         prim_path="{ENV_REGEX_NS}/Robot/base",
         offset=RayCasterCfg.OffsetCfg(pos=(0.0, 0.0, 20.0)),
@@ -166,6 +169,8 @@ class ObservationsCfg:
         # 高度扫描结果（坐标系：sensor frame，也就是 height_scanner 这个传感器自己的坐标系）
         # 本质上是传感器射线打到地面后得到的局部高度信息
         # 这里的 sensor_cfg 指向你在 scene 里定义好的 "height_scanner"
+        # 观测语义 = 地面相对机体的高度（base_z - hit_z - 0.5），平地约 -0.23 m；
+        # 实测 187 条射线的取值范围为 [-0.374, -0.063]，clip=(-1.0, 5.0) 与历史实验一致且不会越界。
         height_scanner = ObsTerm(func=mdp.height_scan,
             params={"sensor_cfg": SceneEntityCfg("height_scanner")},
             clip=(-1.0, 5.0),
@@ -214,8 +219,10 @@ class CommandsCfg:
         resampling_time_range=(10.0, 10.0),
         rel_standing_envs=0.02,
         debug_vis=True,
+        # lin_vel_y（侧向速度指令）从全 0 改为 ±0.1：原来策略完全没有学过侧向移动，
+        # 侧向鲁棒性为 0；给少量侧向指令即可在不显著抬高难度的前提下训练侧移能力。
         ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(0.2, 1.2), lin_vel_y=(0.0, 0.0), ang_vel_z=(-1.0, 1.0)
+            lin_vel_x=(0.2, 1.2), lin_vel_y=(-0.1, 0.1), ang_vel_z=(-1.0, 1.0)
         ),
         limit_ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
             lin_vel_x=(0.2, 6.0), lin_vel_y=(-0.3, 0.3), ang_vel_z=(-1.0, 1.0)
@@ -224,8 +231,10 @@ class CommandsCfg:
 
 @configclass
 class RewardsCfg:
+    # std 从 sqrt(0.25)=0.5 收紧到 sqrt(0.1)≈0.316：原来的高斯门太宽，
+    # 跟踪误差 0.5 m/s 时仍能拿到 37% 的分，导致 track_lin_vel_xy 早早就饱和（0.96+）而不再推动课程。
     track_lin_vel_xy = RewTerm(
-        func=mdp.track_lin_vel_xy_exp, weight=1.0, params={"command_name": "base_velocity", "std": math.sqrt(0.25)}
+        func=mdp.track_lin_vel_xy_exp, weight=1.0, params={"command_name": "base_velocity", "std": math.sqrt(0.1)}
     )
     track_ang_vel_z = RewTerm(
         func=mdp.track_ang_vel_z_exp, weight=0.5, params={"command_name": "base_velocity", "std": math.sqrt(0.25)}
@@ -315,7 +324,11 @@ class EventCfg:
 @configclass
 class CurriculumCfg:
     terrain_levels_vel = CurrTerm(
-        func=mdp.terrain_levels_vel
+        func=mdp.terrain_levels_vel,
+        # log_per_terrain=True：额外记录每种地形类型（terrain type，地形网格的列）的
+        # 平均地形等级与升降级率，曲线名 Curriculum/terrain_levels_vel/level_<name>；
+        # 该参数只影响日志，不改变课程行为，可安全用于消融对照。
+        params={"log_per_terrain": True},
     )
 
 @configclass
@@ -363,7 +376,13 @@ class GO2RobotDemoEnv(ManagerBasedRLEnvCfg):
 
         # check if terrain levels curriculum is enabled - if so, enable curriculum for terrain generator
         # this generates terrains with increasing difficulty and is useful for training
-        if getattr(self.curriculum, "terrain_levels", None) is not None:
+        # 注意：本仓库的课程项名为 terrain_levels_vel（不是 IsaacLab 模板里的 terrain_levels），
+        # 若只检查 "terrain_levels" 会一直得到 None，导致 terrain_generator.curriculum 永远是 False，
+        # 地形会按「随机难度」生成（行 row 不再是难度递增），terrain_levels 课程因此退化为随机采样。
+        terrain_curriculum = getattr(self.curriculum, "terrain_levels", None) or getattr(
+            self.curriculum, "terrain_levels_vel", None
+        )
+        if terrain_curriculum is not None:
             if self.scene.terrain.terrain_generator is not None:
                 self.scene.terrain.terrain_generator.curriculum = True
         else:

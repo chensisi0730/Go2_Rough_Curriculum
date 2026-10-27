@@ -212,7 +212,8 @@ def handle_deprecated_rsl_rl_checkpoint(resume_path):
 
         return checkpoint
 
-    return resume_path
+    # 已是 v5.x 格式（含 actor_state_dict），直接返回加载好的字典
+    return checkpoint
 
 @hydra_task_config(args_cli.task, args_cli.agent)
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: RslRlBaseRunnerCfg):

@@ -70,7 +70,7 @@ from isaaclab.envs import (
 from isaaclab.utils.assets import retrieve_file_path
 from isaaclab.utils.dict import print_dict
 
-from isaaclab_rl.rsl_rl import RslRlBaseRunnerCfg, RslRlVecEnvWrapper, export_policy_as_jit, export_policy_as_onnx
+from isaaclab_rl.rsl_rl import RslRlBaseRunnerCfg, RslRlVecEnvWrapper
 from isaaclab_rl.utils.pretrained_checkpoint import get_published_pretrained_checkpoint
 
 import isaaclab_tasks  # noqa: F401
@@ -78,6 +78,53 @@ from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import go2_demo.tasks  # noqa: F401
+
+
+def handle_deprecated_rsl_rl_cfg(agent_cfg):
+    """Convert the legacy policy/algorithm config to the rsl_rl 5.x actor/critic layout."""
+    if hasattr(agent_cfg, "to_dict"):
+        cfg_dict = agent_cfg.to_dict()
+    elif isinstance(agent_cfg, dict):
+        cfg_dict = agent_cfg
+    else:
+        return agent_cfg
+
+    if "policy" in cfg_dict and "actor" not in cfg_dict:
+        policy_cfg = cfg_dict.pop("policy")
+        cfg_dict["actor"] = {
+            "class_name": "MLPModel",
+            "hidden_dims": policy_cfg.get("actor_hidden_dims", [512, 256, 128]),
+            "activation": policy_cfg.get("activation", "elu"),
+        }
+        cfg_dict["critic"] = {
+            "class_name": "MLPModel",
+            "hidden_dims": policy_cfg.get("critic_hidden_dims", [512, 256, 128]),
+            "activation": policy_cfg.get("activation", "elu"),
+        }
+        if "obs_groups" not in cfg_dict:
+            cfg_dict["obs_groups"] = {"actor": ["policy"], "critic": ["policy"]}
+        init_std = policy_cfg.pop("init_noise_std", 1.0)
+        std_type = policy_cfg.pop("noise_std_type", "scalar")
+        state_dependent = policy_cfg.pop("state_dependent_std", False)
+
+        policy_cfg.pop("stochastic", None)
+        policy_cfg.pop("is_stochastic", None)
+
+        if state_dependent:
+            cfg_dict["actor"]["distribution_cfg"] = {
+                "class_name": "HeteroscedasticGaussianDistribution",
+                "init_std": init_std,
+                "std_type": std_type,
+            }
+        else:
+            cfg_dict["actor"]["distribution_cfg"] = {
+                "class_name": "GaussianDistribution",
+                "init_std": init_std,
+                "std_type": std_type,
+            }
+        cfg_dict["critic"]["distribution_cfg"] = None
+
+    return cfg_dict
 
 
 @hydra_task_config(args_cli.task, args_cli.agent)
@@ -140,43 +187,31 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     print(f"[INFO]: Loading model checkpoint from: {resume_path}")
     # load previously trained model
     if agent_cfg.class_name == "OnPolicyRunner":
-        runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
+        runner = OnPolicyRunner(env, handle_deprecated_rsl_rl_cfg(agent_cfg), log_dir=None, device=agent_cfg.device)
     elif agent_cfg.class_name == "DistillationRunner":
         runner = DistillationRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
     else:
         raise ValueError(f"Unsupported runner class: {agent_cfg.class_name}")
-    runner.load(resume_path)
+    runner.load(
+        resume_path,
+        load_cfg={"actor": True, "critic": True, "optimizer": False, "iteration": False, "rnd": False},
+    )
 
     # obtain the trained policy for inference
     policy = runner.get_inference_policy(device=env.unwrapped.device)
+    policy_nn = runner.alg.get_policy()
 
-    # extract the neural network module
-    # we do this in a try-except to maintain backwards compatibility.
-    try:
-        # version 2.3 onwards
-        policy_nn = runner.alg.policy
-    except AttributeError:
-        # version 2.2 and below
-        policy_nn = runner.alg.actor_critic
-
-    # extract the normalizer
-    if hasattr(policy_nn, "actor_obs_normalizer"):
-        normalizer = policy_nn.actor_obs_normalizer
-    elif hasattr(policy_nn, "student_obs_normalizer"):
-        normalizer = policy_nn.student_obs_normalizer
-    else:
-        normalizer = None
-
-    # export policy to onnx/jit
+    # export policy to onnx/jit (rsl_rl 5.x API)
     export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")
-    export_policy_as_jit(policy_nn, normalizer=normalizer, path=export_model_dir, filename="policy.pt")
-    export_policy_as_onnx(policy_nn, normalizer=normalizer, path=export_model_dir, filename="policy.onnx")
+    runner.export_policy_to_jit(path=export_model_dir, filename="policy.pt")
+    runner.export_policy_to_onnx(path=export_model_dir, filename="policy.onnx")
 
     dt = env.unwrapped.step_dt
 
     # reset environment
     obs = env.get_observations()
     timestep = 0
+    _dbg_i = 0  # 跟随相机诊断计数器（counter，计数器）
     # simulate environment
     while simulation_app.is_running():
         start_time = time.time()
@@ -193,6 +228,22 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             # Exit the play loop after recording one video
             if timestep == args_cli.video_length:
                 break
+
+        # 诊断（diagnostic，诊断信息）：确认视口跟随相机（follow camera，跟随镜头）是否始终跟随 env_0 的机器人。
+        # 仅在环境变量 DEBUG_FOLLOW_CAM=1 时打印，默认关闭，不影响原有 play 行为。
+        if os.environ.get("DEBUG_FOLLOW_CAM"):
+            _dbg_i += 1
+            if _dbg_i % 50 == 0:
+                _vcc = env.unwrapped.viewport_camera_controller
+                _root = [round(float(x), 2) for x in env.unwrapped.scene["robot"].data.root_pos_w[0][:3]]
+                if _vcc is None:
+                    print(f"[FOLLOW_CAM] step={_dbg_i} viewport_camera_controller=None (无 GUI/相机控制器)")
+                else:
+                    _voc = [round(float(x), 2) for x in _vcc.viewer_origin[:3]]
+                    print(
+                        f"[FOLLOW_CAM] step={_dbg_i} robot_root={_root} cam_origin={_voc} "
+                        f"origin_type={_vcc.cfg.origin_type} eye_offset={tuple(_vcc.cfg.eye)}"
+                    )
 
         # time delay for real-time evaluation
         sleep_time = dt - (time.time() - start_time)

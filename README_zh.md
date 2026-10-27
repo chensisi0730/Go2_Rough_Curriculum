@@ -139,7 +139,7 @@ git clone <repo-url>
 cd <project-dir>
 
 # 2. 激活 conda 环境并安装项目扩展
-conda activate <your-conda-env>
+conda activate go2_rough_curriculum
 python -m pip install -e source/go2_demo
 
 # 3. 验证安装
@@ -157,6 +157,7 @@ python scripts/rsl_rl/train.py \
     --task=<TASK_NAME> \
     --num_envs=4096
 ```
+tensorboard --logdir logs/rsl_rl   # 必须是 logs/rsl_rl 本身，见下方 TEXT 说明
 
 ### 基于预训练模型的迁移学习训练
 
@@ -181,6 +182,33 @@ python scripts/rsl_rl/train.py \
 python scripts/rsl_rl/play.py \
     --task=<TASK_NAME> \
     --num_envs=16
+
+
+cd /home/css/work/unitree/rl/zhouzhiguang_repo/my_branchh/Go2_Rough_Curriculum
+source ~/miniconda3/etc/profile.d/conda.sh && conda activate go2_rough_curriculum
+export OMNI_KIT_ACCEPT_EULA=1
+
+python scripts/rsl_rl/play.py \
+    --task=Go2-velocity-v0 \
+    --num_envs 4 \
+    --checkpoint logs/rsl_rl/go2_Complex_terrain/2026-10-26_20-42-22/model_8500.pt
+
+    ② 省事版:只指定 run 目录,自动加载其checkpoint
+
+python scripts/rsl_rl/play.py \
+    --task=Go2-velocity-v0 \
+    --num_envs 4 \
+    --load_run 2026-10-26_20-42-22
+
+③ 无头模式 + 录制视频(不开窗,适合远程/SSH)
+python scripts/rsl_rl/play.py \
+    --task=Go2-velocity-v0 \
+    --num_envs 4 \
+    --headless \
+    --video --video_length 400 \
+    --checkpoint logs/rsl_rl/go2_Complex_terrain/2026-10-26_20-42-22/model_8500.pt
+
+
 ```
 
 ### 调试用 Dummy Agent

@@ -338,6 +338,17 @@ class GO2RobotDemoEnv(ManagerBasedRLEnvCfg):
         # general settings
         self.decimation = 4
         self.episode_length_s = 20.0
+        # viewer settings（视图设置）：跟随相机（follow camera，跟随镜头）。
+        # IsaacLab 默认 origin_type="world"，相机会被固定在「世界原点」，而本任务是多地块地形网格，
+        # env_0 的原点远在 (-29, -74) 附近，机器人一开局就在画面外；
+        # 这里改成跟随 env_0 的机器人根部（asset_root，资产根部）：每个渲染步
+        # cam_eye = 机器人根部 + eye，cam_target = 机器人根部 + lookat，狗始终居中。
+        self.viewer.origin_type = "asset_root"
+        self.viewer.asset_name = "robot"
+        self.viewer.env_index = 0
+        # eye/lookat 在 asset_root 模式下表示「相对机器人根部的世界系偏移量」，不是旋转跟随
+        self.viewer.eye = (5.0, -5.0, 3.0)
+        self.viewer.lookat = (0.0, 0.0, 0.3)
         # simulation settings
         self.sim.dt = 0.005
         self.sim.render_interval = self.decimation

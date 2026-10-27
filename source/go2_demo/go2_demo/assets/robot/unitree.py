@@ -5,7 +5,7 @@ from isaaclab.actuators import IdealPDActuatorCfg, ImplicitActuatorCfg, DCMotorC
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.utils import configclass
 
-UNITREE_MODEL_DIR = "/home/zzg/workspace/pycharm/AER-Adaptive-gait/source/go2_demo/go2_demo/assets/robot/unitree_model"
+UNITREE_MODEL_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), "unitree_model")
 
 UNITREE_GO2_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
